@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Precision Tailor Measurements</title>
+  <title>Tailoring Measurements</title>
   <style>
     body { font-family: 'Arial', sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
     .header { text-align: center; margin-bottom: 20px; }
     .container { display: flex; gap: 20px; margin-top: 20px; }
-    .camera-box { flex: 1; position: relative; }
+    .camera-box { flex: 1; }
     .results { flex: 1; background: #f8f9fa; padding: 20px; border-radius: 8px; }
-    video, canvas { width: 100%; border-radius: 8px; border: 1px solid #ddd; }
+    #output_canvas { width: 100%; border-radius: 8px; border: 1px solid #ddd; background: #000; }
     button { 
       background: #4CAF50; color: white; border: none; padding: 10px 20px; 
       border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px;
@@ -20,62 +20,45 @@
       background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0;
       border-left: 4px solid #2196F3;
     }
-    .reference-marker {
-      position: absolute;
-      width: 60px;
-      height: 90px;
-      background: rgba(255, 152, 0, 0.2);
-      border: 2px dashed #FF9800;
-      pointer-events: none;
-      display: none;
-      transform: translate(-50%, -50%);
-    }
     .status { margin-top: 10px; min-height: 20px; }
-    .distance-control {
-      margin: 15px 0;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
+    #height-input { padding: 8px; width: 60px; text-align: center; }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>Precision Body Measurements</h1>
-    <p>Get accurate body measurements in centimeters</p>
+    <h1>AI Tailoring Measurements</h1>
+    <p>Get body measurements using your height as reference</p>
   </div>
 
   <div class="instructions">
-    <h3>How to get accurate results:</h3>
+    <h3>How to use:</h3>
     <ol>
-      <li><strong>Set your distance</strong> using the slider below</li>
-      <li>Hold a credit card vertically in the orange box</li>
-      <li>Make sure the entire card fits inside the box</li>
-      <li>Wear fitted clothing with arms slightly away</li>
-      <li>Click "Start Measurement" when ready</li>
+      <li>Enter your height (140-220cm)</li>
+      <li>Stand 2 meters from camera</li>
+      <li>Wear fitted clothing</li>
+      <li>Click "Start Measurement"</li>
     </ol>
   </div>
 
-  <div class="distance-control">
-    <label for="distance-slider">Your Distance:</label>
-    <input type="range" id="distance-slider" min="150" max="250" value="200">
-    <span id="distance-value">2.0 meters</span>
+  <div>
+    <label for="height-input">Your Height (cm): </label>
+    <input type="number" id="height-input" min="140" max="220" value="170">
+    <button id="startBtn">Start Measurement</button>
   </div>
 
   <div class="container">
     <div class="camera-box">
-      <video id="input_video" autoplay muted></video>
+      <!-- Only showing the canvas with measurement overlays -->
       <canvas id="output_canvas" width="640" height="480"></canvas>
-      <div class="reference-marker" id="marker"></div>
     </div>
-    <div class="results" id="measurements">
-      <h3>Your Measurements (cm)</h3>
+    <div class="results">
+      <h3>Measurements (cm)</h3>
       <div class="measurement-row">
         <span class="measurement-name">Neck:</span>
         <span class="measurement-value" id="neck-value">-</span>
       </div>
       <div class="measurement-row">
-        <span class="measurement-name">Shoulder Width:</span>
+        <span class="measurement-name">Shoulders:</span>
         <span class="measurement-value" id="shoulder-value">-</span>
       </div>
       <div class="measurement-row">
@@ -87,14 +70,13 @@
         <span class="measurement-value" id="waist-value">-</span>
       </div>
       <div class="measurement-row">
-        <span class="measurement-name">Sleeve Length:</span>
+        <span class="measurement-name">Sleeve:</span>
         <span class="measurement-value" id="sleeve-value">-</span>
       </div>
       <div class="measurement-row">
-        <span class="measurement-name">Shirt Length:</span>
+        <span class="measurement-name">Length:</span>
         <span class="measurement-value" id="length-value">-</span>
       </div>
-      <button id="startBtn">Start Measurement</button>
       <div id="status" class="status"></div>
     </div>
   </div>
@@ -104,23 +86,18 @@
   
   <script>
     // Configuration
-    const CREDIT_CARD_WIDTH_MM = 85.6;
-    const CREDIT_CARD_HEIGHT_MM = 53.98;
-    const MIN_DETECTION_CONFIDENCE = 0.8;
-    const MEASUREMENT_DURATION = 5000;
+    const MIN_CONFIDENCE = 0.7;
+    const MEASUREMENT_TIME = 4000; // 4 seconds
     
     // DOM Elements
-    const videoElement = document.getElementById('input_video');
-    const canvasElement = document.getElementById('output_canvas');
-    const canvasCtx = canvasElement.getContext('2d');
+    const canvas = document.getElementById('output_canvas');
+    const ctx = canvas.getContext('2d');
     const startBtn = document.getElementById('startBtn');
-    const statusElement = document.getElementById('status');
-    const markerElement = document.getElementById('marker');
-    const distanceSlider = document.getElementById('distance-slider');
-    const distanceValue = document.getElementById('distance-value');
+    const statusEl = document.getElementById('status');
+    const heightInput = document.getElementById('height-input');
 
-    // Measurement elements
-    const measurementElements = {
+    // Measurement displays
+    const measurements = {
       neck: document.getElementById('neck-value'),
       shoulder: document.getElementById('shoulder-value'),
       chest: document.getElementById('chest-value'),
@@ -132,12 +109,11 @@
     // State
     let isMeasuring = false;
     let scaleFactor = null;
-    let referenceConfirmed = false;
-    let measurements = [];
-    let userDistance = 200; // cm
-    let markerBaseSize = 60; // Base size at 2m
+    let userHeight = 170;
+    let measurementData = [];
+    let videoElement = document.createElement('video');
 
-    // Initialize MediaPipe Pose
+    // MediaPipe Pose
     const pose = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
@@ -145,42 +121,51 @@
     pose.setOptions({
       modelComplexity: 1,
       smoothLandmarks: true,
-      minDetectionConfidence: MIN_DETECTION_CONFIDENCE,
-      minTrackingConfidence: MIN_DETECTION_CONFIDENCE
+      minDetectionConfidence: MIN_CONFIDENCE,
+      minTrackingConfidence: MIN_CONFIDENCE
     });
 
-    // Distance control
-    distanceSlider.addEventListener('input', (e) => {
-      userDistance = parseInt(e.target.value);
-      distanceValue.textContent = (userDistance / 100).toFixed(1) + " meters";
-      // Adjust marker size based on distance (inverse square law)
-      const distanceRatio = 200 / userDistance; // 2m is baseline
-      markerBaseSize = 60 * distanceRatio;
-    });
-
-    // Process pose results
     pose.onResults((results) => {
-      canvasCtx.save();
-      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Draw camera feed to canvas (background)
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
       if (results.poseLandmarks) {
-        updateMarkerPosition(results.poseLandmarks);
-        drawLandmarks(results.poseLandmarks);
-        
+        // Draw landmarks
+        ctx.fillStyle = '#FF0000';
+        for (const landmark of results.poseLandmarks) {
+          const x = landmark.x * canvas.width;
+          const y = landmark.y * canvas.height;
+          ctx.beginPath();
+          ctx.arc(x, y, 4, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+
+        // Calculate scale from height if needed
+        if (!scaleFactor && results.poseLandmarks[0] && results.poseLandmarks[1]) {
+          const headHeight = Math.abs(results.poseLandmarks[0].y - results.poseLandmarks[1].y) * canvas.height;
+          scaleFactor = userHeight / (headHeight * 7.5); // Head-to-height ratio
+        }
+
         if (isMeasuring) {
-          const currentMeasurements = takeMeasurements(results.poseLandmarks);
-          if (currentMeasurements) {
-            measurements.push(currentMeasurements);
-            displayMeasurements(currentMeasurements);
+          // Take measurements
+          const current = calculateMeasurements(results.poseLandmarks);
+          if (current) {
+            measurementData.push(current);
+            updateDisplay(current);
           }
+          
+          // Draw measurement lines
+          drawMeasurementLines(results.poseLandmarks);
         }
       }
       
-      canvasCtx.restore();
+      ctx.restore();
     });
 
-    // Camera Setup
+    // Camera setup
     const camera = new Camera(videoElement, {
       onFrame: async () => {
         await pose.send({ image: videoElement });
@@ -191,167 +176,129 @@
 
     // Event Listeners
     startBtn.addEventListener('click', () => {
-      if (!referenceConfirmed) {
-        statusElement.textContent = "Please position your credit card in the orange box first";
-        statusElement.style.color = "#f44336";
+      userHeight = parseInt(heightInput.value);
+      if (userHeight < 140 || userHeight > 220) {
+        statusEl.textContent = "Please enter height between 140-220cm";
+        statusEl.style.color = "#f44336";
         return;
       }
       startMeasurement();
     });
 
     // Core Functions
-    function updateMarkerPosition(landmarks) {
-      if (landmarks[11] && landmarks[12]) {
-        // Calculate shoulder center with distance-adjusted offset
-        const leftShoulder = landmarks[11];
-        const rightShoulder = landmarks[12];
-        
-        // Dynamic positioning based on distance
-        const verticalOffset = 0.07 * (userDistance / 200); // Adjust for distance
-        
-        markerPosition = {
-          x: (leftShoulder.x + rightShoulder.x) / 2 * canvasElement.width,
-          y: ((leftShoulder.y + rightShoulder.y) / 2 + verticalOffset) * canvasElement.height
-        };
-        
-        // Update marker position and size
-        markerElement.style.left = `${markerPosition.x}px`;
-        markerElement.style.top = `${markerPosition.y}px`;
-        
-        // Dynamic sizing based on distance
-        const shoulderWidthPixels = Math.abs(leftShoulder.x - rightShoulder.x) * canvasElement.width;
-        const cardWidthPixels = shoulderWidthPixels * 0.35 * (200 / userDistance);
-        
-        markerElement.style.width = `${cardWidthPixels}px`;
-        markerElement.style.height = `${cardWidthPixels * (CREDIT_CARD_HEIGHT_MM/CREDIT_CARD_WIDTH_MM)}px`;
-        markerElement.style.display = 'block';
-        
-        // Calculate scale factor
-        scaleFactor = CREDIT_CARD_WIDTH_MM / cardWidthPixels;
-        referenceConfirmed = true;
-        statusElement.textContent = "Position card in orange box";
-        statusElement.style.color = "#FF9800";
-      }
-    }
-
     function startMeasurement() {
       isMeasuring = true;
-      measurements = [];
+      measurementData = [];
+      scaleFactor = null;
       startBtn.disabled = true;
       startBtn.textContent = "Measuring...";
-      statusElement.textContent = "Hold still for 5 seconds...";
-      statusElement.style.color = "#4CAF50";
+      statusEl.textContent = "Hold still for 4 seconds...";
+      statusEl.style.color = "#4CAF50";
       
       setTimeout(() => {
         isMeasuring = false;
         startBtn.disabled = false;
         startBtn.textContent = "Start Measurement";
-        calculateFinalMeasurements();
-      }, MEASUREMENT_DURATION);
+        finalizeMeasurements();
+      }, MEASUREMENT_TIME);
     }
 
-    function takeMeasurements(landmarks) {
+    function calculateMeasurements(landmarks) {
       if (!landmarks[11] || !landmarks[12] || !scaleFactor) return null;
       
-      // Convert all measurements to cm
-      const shoulderWidth = getDistance(landmarks[11], landmarks[12]) * scaleFactor / 10;
+      const shoulderWidth = getDistance(landmarks[11], landmarks[12]) * scaleFactor;
       const neck = shoulderWidth * 0.85;
       
-      const chestWidth = shoulderWidth;
-      const torsoDepth = getVerticalDistance(landmarks[11], landmarks[23]) * scaleFactor / 10 * 0.3;
-      const chest = Math.PI * (chestWidth + torsoDepth);
+      const torsoDepth = getVerticalDistance(landmarks[11], landmarks[23]) * scaleFactor * 0.3;
+      const chest = Math.PI * (shoulderWidth + torsoDepth);
       
-      const sleeve = getDistance(landmarks[12], landmarks[16]) * scaleFactor / 10;
-      const length = getVerticalDistance(landmarks[7], landmarks[24]) * scaleFactor / 10;
-      
-      const waistWidth = getDistance(landmarks[23], landmarks[24]) * scaleFactor / 10;
-      const waist = Math.PI * (waistWidth + torsoDepth * 0.8);
-      
+      const sleeve = getDistance(landmarks[12], landmarks[16]) * scaleFactor;
+      const length = getVerticalDistance(landmarks[7], landmarks[24]) * scaleFactor;
+      const waist = Math.PI * (getDistance(landmarks[23], landmarks[24]) * scaleFactor + torsoDepth * 0.8);
+
       return { neck, shoulder: shoulderWidth, chest, waist, sleeve, length };
     }
 
-    function calculateFinalMeasurements() {
-      if (measurements.length === 0) {
-        statusElement.textContent = "Measurement failed - try again";
-        statusElement.style.color = "#f44336";
+    function drawMeasurementLines(landmarks) {
+      if (!landmarks[11] || !landmarks[12]) return;
+      
+      // Shoulder line
+      drawLine(landmarks[11], landmarks[12], '#4CAF50', 'Shoulders');
+      
+      // Sleeve line
+      if (landmarks[14] && landmarks[16]) {
+        drawLine(landmarks[12], landmarks[14], '#2196F3', '');
+        drawLine(landmarks[14], landmarks[16], '#2196F3', 'Sleeve');
+      }
+      
+      // Torso line
+      if (landmarks[23]) {
+        drawLine(landmarks[11], landmarks[23], '#4CAF50', 'Torso');
+      }
+      
+      // Shirt length
+      if (landmarks[7] && landmarks[24]) {
+        drawLine(landmarks[7], landmarks[24], '#2196F3', 'Length');
+      }
+    }
+
+    function drawLine(start, end, color, label) {
+      const startX = start.x * canvas.width;
+      const startY = start.y * canvas.height;
+      const endX = end.x * canvas.width;
+      const endY = end.y * canvas.height;
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+
+      if (label) {
+        ctx.fillStyle = color;
+        ctx.font = 'bold 12px Arial';
+        ctx.fillText(label, (startX + endX)/2, (startY + endY)/2);
+      }
+    }
+
+    function updateDisplay(current) {
+      for (const key in current) {
+        measurements[key].textContent = current[key].toFixed(1);
+      }
+    }
+
+    function finalizeMeasurements() {
+      if (measurementData.length === 0) {
+        statusEl.textContent = "Measurement failed - try again";
+        statusEl.style.color = "#f44336";
         return;
       }
       
-      const finalMeasurements = {};
+      // Calculate median values
+      const final = {};
       const keys = ['neck', 'shoulder', 'chest', 'waist', 'sleeve', 'length'];
       
       keys.forEach(key => {
-        const values = measurements.map(m => m[key]).filter(v => v > 0);
+        const values = measurementData.map(m => m[key]).filter(v => v > 0);
         values.sort((a, b) => a - b);
-        finalMeasurements[key] = values[Math.floor(values.length / 2)];
+        final[key] = Math.round(values[Math.floor(values.length/2)] * 2) / 2; // Round to 0.5cm
+        measurements[key].textContent = final[key].toFixed(1);
       });
-      
-      finalMeasurements.neck = Math.max(finalMeasurements.neck, finalMeasurements.shoulder * 0.8);
-      finalMeasurements.chest = Math.max(finalMeasurements.chest, finalMeasurements.shoulder * 2.3);
-      
-      displayFinalMeasurements(finalMeasurements);
-      statusElement.textContent = "Measurement complete!";
-      statusElement.style.color = "#4CAF50";
-    }
 
-    function displayMeasurements(current) {
-      for (const key in current) {
-        measurementElements[key].textContent = current[key].toFixed(1);
-      }
-    }
-
-    function displayFinalMeasurements(final) {
-      for (const key in final) {
-        const rounded = Math.round(final[key] * 2) / 2;
-        measurementElements[key].textContent = rounded.toFixed(1);
-      }
-    }
-
-    // Drawing Functions
-    function drawLandmarks(landmarks) {
-      canvasCtx.fillStyle = '#FF0000';
-      for (const landmark of landmarks) {
-        const x = landmark.x * canvasElement.width;
-        const y = landmark.y * canvasElement.height;
-        canvasCtx.beginPath();
-        canvasCtx.arc(x, y, 4, 0, 2 * Math.PI);
-        canvasCtx.fill();
-      }
-      
-      if (isMeasuring && landmarks[11] && landmarks[12]) {
-        drawLine(landmarks[11], landmarks[12], '#4CAF50');
-        if (landmarks[14] && landmarks[16]) {
-          drawLine(landmarks[12], landmarks[14], '#2196F3');
-          drawLine(landmarks[14], landmarks[16], '#2196F3');
-        }
-        if (landmarks[23]) drawLine(landmarks[11], landmarks[23], '#4CAF50');
-        if (landmarks[7] && landmarks[24]) drawLine(landmarks[7], landmarks[24], '#2196F3');
-      }
-    }
-
-    function drawLine(start, end, color) {
-      const startX = start.x * canvasElement.width;
-      const startY = start.y * canvasElement.height;
-      const endX = end.x * canvasElement.width;
-      const endY = end.y * canvasElement.height;
-
-      canvasCtx.strokeStyle = color;
-      canvasCtx.lineWidth = 2;
-      canvasCtx.beginPath();
-      canvasCtx.moveTo(startX, startY);
-      canvasCtx.lineTo(endX, endY);
-      canvasCtx.stroke();
+      statusEl.textContent = "Measurement complete!";
+      statusEl.style.color = "#4CAF50";
     }
 
     // Helper Functions
     function getDistance(a, b) {
-      const xDiff = (a.x - b.x) * canvasElement.width;
-      const yDiff = (a.y - b.y) * canvasElement.height;
-      return Math.sqrt(xDiff * xDiff + yDiff * yDiff);
+      const xDiff = (a.x - b.x) * canvas.width;
+      const yDiff = (a.y - b.y) * canvas.height;
+      return Math.sqrt(xDiff*xDiff + yDiff*yDiff);
     }
 
     function getVerticalDistance(a, b) {
-      return Math.abs((a.y - b.y) * canvasElement.height);
+      return Math.abs((a.y - b.y) * canvas.height);
     }
 
     // Initialize
