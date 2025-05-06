@@ -1,17 +1,20 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Tailoring Measurements</title>
+  <title>Precision Tailor Measurements</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
   <style>
     body { font-family: 'Arial', sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
     .header { text-align: center; margin-bottom: 20px; }
-    .container { display: flex; gap: 20px; margin-top: 20px; }
-    .camera-box { flex: 1; }
-    .results { flex: 1; background: #f8f9fa; padding: 20px; border-radius: 8px; }
+    .container { display: flex; flex-direction: column; gap: 20px; margin-top: 20px; }
+    .camera-box { position: relative; }
+    .results { background: #f8f9fa; padding: 20px; border-radius: 8px; }
     #output_canvas { width: 100%; border-radius: 8px; border: 1px solid #ddd; background: #000; }
     button { 
       background: #4CAF50; color: white; border: none; padding: 10px 20px; 
       border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px;
+      width: 100%;
     }
     .measurement-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
     .measurement-name { font-weight: bold; width: 120px; }
@@ -22,43 +25,48 @@
     }
     .status { margin-top: 10px; min-height: 20px; }
     #height-input { padding: 8px; width: 60px; text-align: center; }
+    
+    @media (min-width: 768px) {
+      .container { flex-direction: row; }
+      button { width: auto; }
+    }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>AI Tailoring Measurements</h1>
-    <p>Get body measurements using your height as reference</p>
+    <h1>Precision Body Measurements</h1>
+    <p>Get accurate body measurements in centimeters</p>
   </div>
 
   <div class="instructions">
-    <h3>How to use:</h3>
+    <h3>How to get accurate results:</h3>
     <ol>
-      <li>Enter your height (140-220cm)</li>
-      <li>Stand 2 meters from camera</li>
-      <li>Wear fitted clothing</li>
-      <li>Click "Start Measurement"</li>
+      <li>Enter your <strong>exact height</strong></li>
+      <li>Stand <strong>2 meters</strong> from camera</li>
+      <li>Wear fitted clothing with arms slightly away</li>
+      <li>Click "Start Measurement" when ready</li>
+      <li><strong>Mobile users:</strong> Allow camera access when prompted</li>
     </ol>
   </div>
 
   <div>
     <label for="height-input">Your Height (cm): </label>
-    <input type="number" id="height-input" min="140" max="220" value="170">
+    <input type="number" id="height-input" min="140" max="220" value="175">
     <button id="startBtn">Start Measurement</button>
   </div>
 
   <div class="container">
     <div class="camera-box">
-      <!-- Only showing the canvas with measurement overlays -->
       <canvas id="output_canvas" width="640" height="480"></canvas>
     </div>
-    <div class="results">
-      <h3>Measurements (cm)</h3>
+    <div class="results" id="measurements">
+      <h3>Your Measurements (cm)</h3>
       <div class="measurement-row">
         <span class="measurement-name">Neck:</span>
         <span class="measurement-value" id="neck-value">-</span>
       </div>
       <div class="measurement-row">
-        <span class="measurement-name">Shoulders:</span>
+        <span class="measurement-name">Shoulder Width:</span>
         <span class="measurement-value" id="shoulder-value">-</span>
       </div>
       <div class="measurement-row">
@@ -70,11 +78,11 @@
         <span class="measurement-value" id="waist-value">-</span>
       </div>
       <div class="measurement-row">
-        <span class="measurement-name">Sleeve:</span>
+        <span class="measurement-name">Sleeve Length:</span>
         <span class="measurement-value" id="sleeve-value">-</span>
       </div>
       <div class="measurement-row">
-        <span class="measurement-name">Length:</span>
+        <span class="measurement-name">Shirt Length:</span>
         <span class="measurement-value" id="length-value">-</span>
       </div>
       <div id="status" class="status"></div>
@@ -86,8 +94,8 @@
   
   <script>
     // Configuration
-    const MIN_CONFIDENCE = 0.7;
-    const MEASUREMENT_TIME = 4000; // 4 seconds
+    const MIN_DETECTION_CONFIDENCE = 0.7;
+    const MEASUREMENT_DURATION = 5000; // 5 seconds
     
     // DOM Elements
     const canvas = document.getElementById('output_canvas');
@@ -97,7 +105,7 @@
     const heightInput = document.getElementById('height-input');
 
     // Measurement displays
-    const measurements = {
+    const measurementElements = {
       neck: document.getElementById('neck-value'),
       shoulder: document.getElementById('shoulder-value'),
       chest: document.getElementById('chest-value'),
@@ -108,10 +116,12 @@
 
     // State
     let isMeasuring = false;
-    let scaleFactor = null;
-    let userHeight = 170;
-    let measurementData = [];
+    let scaleFactor = null; // pixels per cm
+    let userHeight = 175;
+    let measurements = [];
     let videoElement = document.createElement('video');
+    videoElement.style.display = 'none';
+    document.body.appendChild(videoElement);
 
     // MediaPipe Pose
     const pose = new Pose({
@@ -121,78 +131,149 @@
     pose.setOptions({
       modelComplexity: 1,
       smoothLandmarks: true,
-      minDetectionConfidence: MIN_CONFIDENCE,
-      minTrackingConfidence: MIN_CONFIDENCE
+      minDetectionConfidence: MIN_DETECTION_CONFIDENCE,
+      minTrackingConfidence: MIN_DETECTION_CONFIDENCE
     });
 
     pose.onResults((results) => {
-      ctx.save();
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // Draw camera feed to canvas (background)
-      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+      try {
+        ctx.save();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw camera feed to canvas
+        ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
-      if (results.poseLandmarks) {
-        // Draw landmarks
-        ctx.fillStyle = '#FF0000';
-        for (const landmark of results.poseLandmarks) {
-          const x = landmark.x * canvas.width;
-          const y = landmark.y * canvas.height;
-          ctx.beginPath();
-          ctx.arc(x, y, 4, 0, 2 * Math.PI);
-          ctx.fill();
-        }
-
-        // Calculate scale from height if needed
-        if (!scaleFactor && results.poseLandmarks[0] && results.poseLandmarks[1]) {
-          const headHeight = Math.abs(results.poseLandmarks[0].y - results.poseLandmarks[1].y) * canvas.height;
-          scaleFactor = userHeight / (headHeight * 7.5); // Head-to-height ratio
-        }
-
-        if (isMeasuring) {
-          // Take measurements
-          const current = calculateMeasurements(results.poseLandmarks);
-          if (current) {
-            measurementData.push(current);
-            updateDisplay(current);
+        if (results.poseLandmarks) {
+          // Draw landmarks
+          ctx.fillStyle = '#FF0000';
+          for (const landmark of results.poseLandmarks) {
+            const x = landmark.x * canvas.width;
+            const y = landmark.y * canvas.height;
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, 2 * Math.PI);
+            ctx.fill();
           }
-          
-          // Draw measurement lines
-          drawMeasurementLines(results.poseLandmarks);
+
+          // Calculate scale factor using landmarks 5 (left shoulder) and 30 (right heel)
+          if (scaleFactor === null && results.poseLandmarks[5] && results.poseLandmarks[30]) {
+            const shoulder = results.poseLandmarks[5];
+            const heel = results.poseLandmarks[30];
+            
+            // Calculate vertical distance in pixels
+            const pixelHeight = Math.abs((shoulder.y - heel.y) * canvas.height);
+            
+            // Shoulder-to-heel is approximately 60% of total height (based on anthropometric data)
+            const estimatedFullHeight = pixelHeight / 0.6;
+            
+            if (pixelHeight > 100) { // Sanity check
+                // Convert to cm-to-pixel ratio (userHeight in cm / estimated height in pixels)
+                scaleFactor = estimatedFullHeight / userHeight; // cm per pixel
+                console.log("Scale factor calculated:", scaleFactor, "cm/pixel");
+                statusEl.textContent = "Scale factor calculated. Hold still...";
+                statusEl.style.color = "#4CAF50";
+                
+                // Also calculate and store the inverse for measurements
+                window.pixelsPerCm = 1 / scaleFactor;
+            }
+          }
+
+          if (isMeasuring) {
+            const current = takeMeasurements(results.poseLandmarks);
+            if (current) {
+              measurements.push(current);
+              updateDisplay(current);
+            }
+            drawMeasurementLines(results.poseLandmarks);
+          }
         }
+        
+        ctx.restore();
+      } catch (e) {
+        console.error("Processing error:", e);
+        statusEl.textContent = "Processing error - try again";
+        statusEl.style.color = "#f44336";
       }
-      
-      ctx.restore();
     });
 
     // Camera setup
     const camera = new Camera(videoElement, {
       onFrame: async () => {
-        await pose.send({ image: videoElement });
+        try {
+          await pose.send({ image: videoElement });
+        } catch (e) {
+          console.error("Camera frame error:", e);
+          statusEl.textContent = "Camera error - please refresh";
+          statusEl.style.color = "#f44336";
+        }
       },
       width: 640,
       height: 480
     });
 
+    // Improved camera initialization
+    async function initializeCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'user', // Use front camera
+            width: { ideal: 640 },
+            height: { ideal: 480 }
+          }
+        });
+        
+        videoElement.srcObject = stream;
+        await videoElement.play();
+        camera.start();
+        return true;
+      } catch (error) {
+        console.error("Camera error:", error);
+        statusEl.textContent = "Camera access denied - please allow permissions";
+        statusEl.style.color = "#f44336";
+        
+        // Show instructions for mobile users
+        if (/Mobi|Android/i.test(navigator.userAgent)) {
+          statusEl.innerHTML += "<br><br>On mobile: 1. Tap the lock icon in address bar<br>2. Set camera permissions to 'Allow'";
+        }
+        return false;
+      }
+    }
+
+    // Handle device orientation changes
+    window.addEventListener('orientationchange', () => {
+      setTimeout(() => {
+        if (videoElement.videoWidth && videoElement.videoHeight) {
+          canvas.width = videoElement.videoWidth;
+          canvas.height = videoElement.videoHeight;
+        }
+      }, 500);
+    });
+
     // Event Listeners
-    startBtn.addEventListener('click', () => {
+    startBtn.addEventListener('click', async () => {
       userHeight = parseInt(heightInput.value);
       if (userHeight < 140 || userHeight > 220) {
         statusEl.textContent = "Please enter height between 140-220cm";
         statusEl.style.color = "#f44336";
         return;
       }
+      
+      // On mobile, ensure we have permission
+      if (/Mobi|Android/i.test(navigator.userAgent)) {
+        const success = await initializeCamera();
+        if (!success) return;
+      }
+      
       startMeasurement();
     });
 
     // Core Functions
     function startMeasurement() {
       isMeasuring = true;
-      measurementData = [];
+      measurements = [];
       scaleFactor = null;
       startBtn.disabled = true;
       startBtn.textContent = "Measuring...";
-      statusEl.textContent = "Hold still for 4 seconds...";
+      statusEl.textContent = "Calculating scale... Please stand straight";
       statusEl.style.color = "#4CAF50";
       
       setTimeout(() => {
@@ -200,23 +281,39 @@
         startBtn.disabled = false;
         startBtn.textContent = "Start Measurement";
         finalizeMeasurements();
-      }, MEASUREMENT_TIME);
+      }, MEASUREMENT_DURATION);
     }
 
-    function calculateMeasurements(landmarks) {
-      if (!landmarks[11] || !landmarks[12] || !scaleFactor) return null;
+    function takeMeasurements(landmarks) {
+      if (!landmarks[11] || !landmarks[12] || scaleFactor === null) return null;
       
-      const shoulderWidth = getDistance(landmarks[11], landmarks[12]) * scaleFactor;
-      const neck = shoulderWidth * 0.85;
+      // Get pixel distances
+      const shoulderPixels = getDistance(landmarks[11], landmarks[12]);
+      const sleevePixels = getDistance(landmarks[12], landmarks[16]);
+      const torsoPixels = getVerticalDistance(landmarks[11], landmarks[23]);
+      const lengthPixels = getVerticalDistance(landmarks[7], landmarks[24]);
+      const waistPixels = getDistance(landmarks[23], landmarks[24]);
       
-      const torsoDepth = getVerticalDistance(landmarks[11], landmarks[23]) * scaleFactor * 0.3;
-      const chest = Math.PI * (shoulderWidth + torsoDepth);
+      // Convert to centimeters (pixels / scaleFactor = cm)
+      const shoulderWidth = shoulderPixels / scaleFactor;
+      const sleeveLength = sleevePixels / scaleFactor;
+      const torsoDepth = (torsoPixels / scaleFactor) * 0.35; // Empirical adjustment
+      const shirtLength = lengthPixels / scaleFactor;
+      const waistWidth = waistPixels / scaleFactor;
       
-      const sleeve = getDistance(landmarks[12], landmarks[16]) * scaleFactor;
-      const length = getVerticalDistance(landmarks[7], landmarks[24]) * scaleFactor;
-      const waist = Math.PI * (getDistance(landmarks[23], landmarks[24]) * scaleFactor + torsoDepth * 0.8);
+      // Calculate circumferences (ellipse approximation)
+      const chestCircumference = Math.PI * (shoulderWidth + torsoDepth);
+      const waistCircumference = Math.PI * (waistWidth + torsoDepth * 0.8);
+      const neckCircumference = shoulderWidth * 0.85; // Anatomical ratio
 
-      return { neck, shoulder: shoulderWidth, chest, waist, sleeve, length };
+      return {
+        neck: neckCircumference,
+        shoulder: shoulderWidth,
+        chest: chestCircumference,
+        waist: waistCircumference,
+        sleeve: sleeveLength,
+        length: shirtLength
+      };
     }
 
     function drawMeasurementLines(landmarks) {
@@ -264,12 +361,12 @@
 
     function updateDisplay(current) {
       for (const key in current) {
-        measurements[key].textContent = current[key].toFixed(1);
+        measurementElements[key].textContent = current[key].toFixed(1);
       }
     }
 
     function finalizeMeasurements() {
-      if (measurementData.length === 0) {
+      if (measurements.length === 0) {
         statusEl.textContent = "Measurement failed - try again";
         statusEl.style.color = "#f44336";
         return;
@@ -280,11 +377,20 @@
       const keys = ['neck', 'shoulder', 'chest', 'waist', 'sleeve', 'length'];
       
       keys.forEach(key => {
-        const values = measurementData.map(m => m[key]).filter(v => v > 0);
+        const values = measurements.map(m => m[key]).filter(v => v > 0);
         values.sort((a, b) => a - b);
-        final[key] = Math.round(values[Math.floor(values.length/2)] * 2) / 2; // Round to 0.5cm
-        measurements[key].textContent = final[key].toFixed(1);
+        final[key] = values[Math.floor(values.length/2)];
       });
+      
+      // Apply tailoring-specific adjustments
+      final.neck = Math.max(final.neck, final.shoulder * 0.8);
+      final.chest = Math.max(final.chest, final.shoulder * 2.3);
+      
+      // Round to nearest 0.5cm and display
+      for (const key in final) {
+        const rounded = Math.round(final[key] * 2) / 2;
+        measurementElements[key].textContent = rounded.toFixed(1);
+      }
 
       statusEl.textContent = "Measurement complete!";
       statusEl.style.color = "#4CAF50";
@@ -301,8 +407,10 @@
       return Math.abs((a.y - b.y) * canvas.height);
     }
 
-    // Initialize
-    camera.start();
+    // Initialize - don't start camera automatically on mobile
+    if (!/Mobi|Android/i.test(navigator.userAgent)) {
+      initializeCamera();
+    }
   </script>
 </body>
 </html>
